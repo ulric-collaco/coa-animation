@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>MOV R1,R2 — Full Datapath Animation</title>
+<style>
+  :root{
+    --bg:#ffffff; --panel:#ffffff;
+  --accent:#000000; --accent-2:#333333; --muted:#000000;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Inter,system-ui,Arial,Segoe UI,Helvetica,Arial;background:var(--bg);color:var(--muted);padding:18px}
+  .topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+  .title{font-weight:700;font-size:18px;color:var(--accent)}
+  .controls{display:flex;gap:8px;align-items:center}
+  button{padding:8px 12px;border-radius:6px;border:1px solid rgba(0,0,0,0.08);background:transparent;color:var(--accent);font-weight:600;cursor:pointer}
+  button.ghost{background:transparent;border:1px solid rgba(0,0,0,0.06);color:var(--accent)}
+  .layout{display:grid;grid-template-columns:300px 1fr 300px;gap:16px;align-items:start}
+  .panel{background:var(--panel);padding:12px;border-radius:8px;border:1px solid rgba(0,0,0,0.06)}
+  .left .step-item{padding:10px;border-radius:6px;background:transparent;border:1px solid transparent;cursor:pointer;transition:all .12s}
+  .left .step-item.active{border:1px solid rgba(0,0,0,0.08);background:rgba(0,0,0,0.03);transform:translateY(-2px)}
+  .center{position:relative;min-height:520px;border-radius:8px;overflow:hidden;padding:10px}
+  /* SVG styling */
+  svg{width:100%;height:520px;display:block}
+  .unit{fill:transparent;stroke:rgba(0,0,0,0.12);stroke-width:1.2}
+  .unit .label{font-family:Orbitron,monospace;font-size:12px;fill:var(--accent)}
+  .unit.active{stroke:rgba(0,0,0,0.95);transform-origin:center}
+  .path{stroke:rgba(0,0,0,0.12);stroke-width:2.2;fill:none;stroke-linecap:round}
+  .path.active{stroke:rgba(0,0,0,0.9);stroke-width:2.6}
+  @keyframes glow{0%{stroke-opacity:.7}50%{stroke-opacity:1}100%{stroke-opacity:.7}}
+  .moving-dot{r:6;fill:var(--accent)}
+  /* right status */
+  .status-row{display:flex;justify-content:space-between;gap:8px;padding:8px 6px;border-radius:6px;background:transparent;border:1px solid rgba(0,0,0,0.04);margin-bottom:8px}
+  .title-sm{font-family:Orbitron,monospace;color:var(--accent);font-size:13px}
+  .small{font-size:13px;color:var(--muted)}
+  /* pipeline bar */
+  .pipeline{display:flex;gap:8px;margin-top:12px}
+  .stage{flex:1;padding:8px;border-radius:6px;text-align:center;background:transparent;border:1px solid rgba(0,0,0,0.02);color:var(--accent-2)}
+  .stage.active{background:rgba(0,0,0,0.03);font-weight:700;color:var(--accent)}
+  /* small helper */
+  .muted{color:var(--muted);font-size:13px}
+  .controls-row{display:flex;gap:8px;align-items:center;margin-top:8px}
+  .left .heading{font-family:Orbitron,monospace;color:var(--accent);margin-bottom:8px}
+  .right .heading{font-family:Orbitron,monospace;color:var(--accent);margin-bottom:8px}
+  @media(max-width:1000px){.layout{grid-template-columns:1fr;grid-auto-rows:auto}.center{order:2}.left,.right{order:1}}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div>
+  <div class="title">SUB•CORE — MOV R1, R2 (Detailed Datapath)</div>
+  <div class="muted" style="font-size:13px">Static datapath + state-driven steps</div>
+  </div>
+
+  <div class="controls">
+    <button id="playStop">Play</button>
+    <button class="ghost" id="prevBtn">⟨ Prev</button>
+    <button class="ghost" id="nextBtn">Next ⟩</button>
+  </div>
+</div>
+
+<div class="layout">
+  <!-- LEFT: Steps list -->
+  <div class="panel left">
+    <div class="heading">Steps (click to jump)</div>
+    <div id="stepsList" style="display:flex;flex-direction:column;gap:8px;max-height:520px;overflow:auto;padding-right:6px"></div>
+    <div style="margin-top:10px" class="muted">Grouped: Fetch (1–3) · Decode (4–7) · Execute (8–11) · Memory (12–13) · Write-back (14–17)</div>
+  </div>
+
+  <!-- CENTER: Datapath SVG -->
+  <div class="panel center">
+    <svg id="datapathSVG" viewBox="0 0 1000 520" preserveAspectRatio="xMidYMid meet">
+      <!-- Boxes -->
+      <g id="PC" transform="translate(40,30)">
+        <rect class="unit" x="0" y="0" rx="8" ry="8" width="110" height="50"></rect>
+        <text class="label" x="55" y="28" text-anchor="middle">PC</text>
+        <text id="PC-val" x="55" y="44" text-anchor="middle" class="small muted">0x1000</text>
+      </g>
+
+      <g id="MAR" transform="translate(170,30)">
+        <rect class="unit" x="0" y="0" rx="8" ry="8" width="110" height="50"></rect>
+        <text class="label" x="55" y="28" text-anchor="middle">MAR</text>
+        <text id="MAR-val" x="55" y="44" text-anchor="middle" class="small muted">-</text>
+      </g>
+
+      <g id="MEM" transform="translate(320,20)">
+        <rect class="unit" x="0" y="0" rx="10" ry="10" width="160" height="160"></rect>
+        <text class="label" x="80" y="28" text-anchor="middle">Memory</text>
+  <text id="MEM-val" x="80" y="60" text-anchor="middle" class="small muted">[0x1000] = MOV R1,R2</text>
+      </g>
+
+      <g id="MDR" transform="translate(520,30)">
+        <rect class="unit" x="0" y="0" rx="8" ry="8" width="110" height="50"></rect>
+        <text class="label" x="55" y="28" text-anchor="middle">MDR</text>
+        <text id="MDR-val" x="55" y="44" text-anchor="middle" class="small muted">-</text>
+      </g>
+
+      <g id="IR" transform="translate(670,30)">
+        <rect class="unit" x="0" y="0" rx="8" ry="8" width="140" height="50"></rect>
+        <text class="label" x="70" y="28" text-anchor="middle">IR</text>
+        <text id="IR-val" x="70" y="44" text-anchor="middle" class="small muted">-</text>
+      </g>
+
+      <g id="CTRL" transform="translate(840,30)">
+        <rect class="unit" x="0" y="0" rx="8" ry="8" width="120" height="70"></rect>
+        <text class="label" x="60" y="28" text-anchor="middle">Control</text>
+        <text id="CTRL-val" x="60" y="48" text-anchor="middle" class="small muted">-</text>
+      </g>
+
+      <!-- Register file -->
+      <g id="REGFILE" transform="translate(40,140)">
+        <rect class="unit" x="0" y="0" rx="8" ry="8" width="210" height="140"></rect>
+        <text class="label" x="105" y="24" text-anchor="middle">Register File</text>
+  <text id="R1-val" x="30" y="56" class="small muted">R1: 0x0000</text>
+  <text id="R2-val" x="30" y="80" class="small muted">R2: 0x0003</text>
+      </g>
+
+      <!-- ALU -->
+      <g id="ALU" transform="translate(320,200)">
+        <rect class="unit" x="0" y="0" rx="10" ry="10" width="140" height="90"></rect>
+        <text class="label" x="70" y="28" text-anchor="middle">ALU</text>
+        <text id="ALU-val" x="70" y="60" text-anchor="middle" class="small muted">A - B → ?</text>
+      </g>
+
+      <!-- ACC and FLAGS -->
+      <g id="ACC" transform="translate(500,210)">
+        <rect class="unit" x="0" y="0" rx="8" ry="8" width="120" height="60"></rect>
+        <text class="label" x="60" y="22" text-anchor="middle">ACC</text>
+        <text id="ACC-val" x="60" y="44" text-anchor="middle" class="small muted">-</text>
+      </g>
+
+      <g id="FLAGS" transform="translate(650,210)">
+        <rect class="unit" x="0" y="0" rx="8" ry="8" width="120" height="60"></rect>
+        <text class="label" x="60" y="22" text-anchor="middle">FLAGS</text>
+        <text id="FLAGS-val" x="60" y="44" text-anchor="middle" class="small muted">Z:0 N:0 C:0 O:0</text>
+      </g>
+
+      <!-- Data bus - visual rectangle -->
+  <rect x="250" y="300" width="520" height="12" rx="6" ry="6" fill="rgba(0,0,0,0.04)"></rect>
+      <text x="190" y="308" class="small muted">Data Bus</text>
+
+      <!-- SVG paths for datapath arrows (invisible base paths) -->
+      <!-- We'll name each path with an id used by JS -->
+      <path id="p_pc_mar" class="path" d="M100 55 L170 55" />
+      <path id="p_mar_mem" class="path" d="M280 55 L320 55" />
+      <path id="p_mem_mdr" class="path" d="M480 100 L520 55" />
+      <path id="p_mdr_ir" class="path" d="M610 55 L670 55" />
+      <path id="p_ir_ctrl" class="path" d="M810 55 L840 55" />
+      <path id="p_ir_ctrl_down" class="path" d="M740 80 L740 120 L840 120" opacity="0.15" /> <!-- decorative -->
+
+      <path id="p_ctrl_reg" class="path" d="M900 95 L900 160 L250 160" /> <!-- control down to regfile -->
+      <path id="p_reg_alu" class="path" d="M250 200 L320 200" />
+      <path id="p_alu_acc" class="path" d="M460 245 L500 245" />
+      <path id="p_alu_flags" class="path" d="M460 210 L650 210" />
+      <path id="p_acc_bus" class="path" d="M560 245 L560 310 L300 310" />
+      <path id="p_bus_reg" class="path" d="M300 310 L165 200" />
+
+      <!-- group to host moving dots dynamically -->
+      <g id="movingDots"></g>
+    </svg>
+  </div>
+
+  <!-- RIGHT: Status / narration / pipeline -->
+  <div class="panel right">
+    <div class="heading">Status & Narration</div>
+
+    <div class="status-row">
+      <div>
+        <div class="title-sm">Address Bus</div>
+        <div id="bus-address" class="small muted">-</div>
+      </div>
+      <div>
+        <div class="title-sm">Data Bus</div>
+        <div id="bus-data" class="small muted">-</div>
+      </div>
+    </div>
+
+    <div class="status-row">
+      <div>
+        <div class="title-sm">Control Bus</div>
+        <div id="bus-control" class="small muted">-</div>
+      </div>
+      <div>
+        <div class="title-sm">PC</div>
+        <div id="pc-status" class="small muted">0x1000</div>
+      </div>
+    </div>
+
+    <div style="margin-top:8px">
+      <div class="title-sm">Registers</div>
+      <div class="small" style="margin-top:6px">
+  <div>R1: <span id="st-r1">0x0000</span></div>
+  <div>R2: <span id="st-r2">0x0003</span></div>
+      </div>
+    </div>
+
+    <div style="margin-top:8px">
+      <div class="title-sm">ACC</div>
+      <div id="st-acc" class="small muted">-</div>
+    </div>
+
+    <div style="margin-top:8px">
+      <div class="title-sm">Flags</div>
+      <div id="st-flags" class="small muted">Z:0 N:0 C:0 O:0</div>
+    </div>
+
+    <div style="margin-top:12px">
+      <div class="title-sm">Narration</div>
+      <div id="narrationText" aria-live="polite" style="margin-top:8px;font-size:14px;min-height:66px">Click Play or Next to begin.</div>
+    </div>
+
+    <div style="margin-top:12px">
+      <div class="title-sm">Pipeline</div>
+      <div class="pipeline">
+        <div id="stage-IF" class="stage">IF</div>
+        <div id="stage-ID" class="stage">ID</div>
+        <div id="stage-EX" class="stage">EX</div>
+        <div id="stage-MEM" class="stage">MEM</div>
+        <div id="stage-WB" class="stage">WB</div>
+      </div>
+    </div>
+
+  <div style="margin-top:12px" class="muted">Tip: You can click any step on the left or use Next/Prev. Click Play to start the animation.</div>
+  </div>
+</div>
+
+<script>
+/* ========== Step definitions (Intro + 17 steps) ==========
+
+  Each step has:
+   - id: number
+   - title: short title
+   - narration: text (spoken)
+  - registers: {PC, MAR, MDR, IR, R1, R2, ACC}
+   - buses: {address, data, control}
+   - flags: {Z,N,C,O}
+   - activePaths: array of path ids (strings) to animate/highlight
+   - pipeline: 'IF'|'ID'|'EX'|'MEM'|'WB' (for pipeline bar highlight)
+*/
+
+// Replace steps with micro-ops matching the user's 8086 breakdown for MOV R1,R2
+const steps = [
+  { id: 0, title: 'Intro', narration: 'We will execute MOV R1, R2 (copy R2 into R1). Follow micro-ops T1..T5.',
+    registers: { PC: '0x1000', MAR: '-', MDR: '-', IR: '-', R1: '0x0000', R2: '0x0003', ACC: '-' },
+    buses: { address: '-', data: '-', control: '-' }, flags: { Z:0,N:0,C:0,O:0 }, activePaths: [], pipeline: null },
+
+  // T1: PC -> MAR
+  { id: 1, title: 'T1: PC → MAR', narration: 'Program Counter places the instruction address onto the address bus and MAR is loaded.',
+    registers: { PC: '0x1000', MAR: '0x1000', MDR: '-', IR: '-', R1: '0x0000', R2: '0x0003', ACC: '-' },
+    buses: { address: '0x1000', data: '-', control: '-' }, flags: { Z:0,N:0,C:0,O:0 },
+    activePaths: ['p_pc_mar'], pipeline: 'IF' },
+
+  // T2: Memory -> MDR ; PC+1 -> PC
+  { id: 2, title: 'T2: Mem → MDR; PC+1 → PC', narration: 'Memory drives the instruction onto the data bus into MDR. PC increments to next instruction.',
+    registers: { PC: '0x1004', MAR: '0x1000', MDR: 'MOV R1,R2', IR: '-', R1: '0x0000', R2: '0x0003', ACC: '-' },
+    buses: { address: '0x1000', data: 'MOV R1,R2', control: 'MemRead' }, flags: { Z:0,N:0,C:0,O:0 },
+    activePaths: ['p_mar_mem','p_mem_mdr'], pipeline: 'IF' },
+
+  // T3: MDR -> IR
+  { id: 3, title: 'T3: MDR → IR', narration: 'The instruction in MDR is transferred to IR for decoding.',
+    registers: { PC: '0x1004', MAR: '0x1000', MDR: 'MOV R1,R2', IR: 'MOV R1,R2', R1: '0x0000', R2: '0x0003', ACC: '-' },
+    buses: { address: '-', data: '-', control: '-' }, flags: { Z:0,N:0,C:0,O:0 },
+    activePaths: ['p_mdr_ir'], pipeline: 'IF' },
+
+  // T4: IR -> CU (Decode) + identify operands
+  { id: 4, title: 'T4: Decode (IR → CU)', narration: 'Control unit decodes opcode and identifies destination R1 and source R2.',
+    registers: { PC: '0x1004', MAR: '0x1000', MDR: 'MOV R1,R2', IR: 'MOV R1,R2', R1: '0x0000', R2: '0x0003', ACC: '-' },
+    buses: { address: '-', data: '-', control: '-' }, flags: { Z:0,N:0,C:0,O:0 },
+    activePaths: ['p_ir_ctrl'], pipeline: 'ID' },
+
+  // T5: R2 -> Internal Bus
+  { id: 5, title: 'T5: R2 → Bus', narration: 'Register R2 places its value onto the internal data bus for transfer.',
+    registers: { PC: '0x1004', MAR: '0x1000', MDR: 'MOV R1,R2', IR: 'MOV R1,R2', R1: '0x0000', R2: '0x0003', ACC: '-' },
+    buses: { address: '-', data: 'R2=0x0003', control: 'REG_READ' }, flags: { Z:0,N:0,C:0,O:0 },
+    activePaths: ['p_ctrl_reg','p_bus_reg'], pipeline: 'EX' },
+
+  // T6: Bus -> R1 (Write-back)
+  { id: 6, title: 'T6: Bus → R1 (Write)', narration: 'The value on the bus is written into R1. MOV completes; no ALU operation.',
+    registers: { PC: '0x1004', MAR: '0x1000', MDR: 'MOV R1,R2', IR: 'MOV R1,R2', R1: '0x0003', R2: '0x0003', ACC: '-' },
+    buses: { address: '-', data: '0x0003', control: 'REG_WRITE' }, flags: { Z:0,N:0,C:0,O:0 },
+    activePaths: ['p_bus_reg','p_ctrl_reg'], pipeline: 'WB' },
+
+  // Conclusion
+  { id: 7, title: 'Done', narration: 'MOV R1,R2 finished. R1 now contains the value from R2. PC points to next instruction.',
+    registers: { PC: '0x1004', MAR: '0x1000', MDR: 'MOV R1,R2', IR: 'MOV R1,R2', R1: '0x0003', R2: '0x0003', ACC: '-' },
+    buses: { address: '-', data: '-', control: '-' }, flags: { Z:0,N:0,C:0,O:0 }, activePaths: [], pipeline: null }
+];
+
+/* ========== DOM references ========== */
+const stepsList = document.getElementById('stepsList');
+const narrationText = document.getElementById('narrationText');
+const playStopBtn = document.getElementById('playStop');
+const prevBtn = document.getElementById('prevBtn');
+const nextBtn = document.getElementById('nextBtn');
+
+const elPC = document.getElementById('PC-val');
+const elMAR = document.getElementById('MAR-val');
+const elMDR = document.getElementById('MDR-val');
+const elIR = document.getElementById('IR-val');
+const elR1 = document.getElementById('R1-val');
+const elR2 = document.getElementById('R2-val');
+const elALU = document.getElementById('ALU-val');
+const elACC = document.getElementById('ACC-val');
+const elFLAGS = document.getElementById('FLAGS-val');
+
+const stR1 = document.getElementById('st-r1');
+const stR2 = document.getElementById('st-r2');
+const stACC = document.getElementById('st-acc');
+const stFLAGS = document.getElementById('st-flags');
+
+const stBusAddr = document.getElementById('bus-address');
+const stBusData = document.getElementById('bus-data');
+const stBusControl = document.getElementById('bus-control');
+const stPC = document.getElementById('pc-status');
+
+const stageIf = document.getElementById('stage-IF');
+const stageId = document.getElementById('stage-ID');
+const stageEx = document.getElementById('stage-EX');
+const stageMem = document.getElementById('stage-MEM');
+const stageWb = document.getElementById('stage-WB');
+
+const svg = document.getElementById('datapathSVG');
+const movingDotsGroup = document.getElementById('movingDots');
+
+/* ========== init: populate left steps list ========== */
+steps.forEach(s => {
+  const d = document.createElement('div');
+  d.className = 'step-item';
+  d.dataset.id = s.id;
+  d.innerHTML = `<div style="font-weight:700">${s.id}. ${s.title}</div>
+                 <div style="font-size:12px;color:rgba(0,0,0,0.6);margin-top:6px">${s.narration.slice(0,80)}${s.narration.length>80?'...':''}</div>`;
+  d.addEventListener('click',()=> jumpToStep(s.id));
+  stepsList.appendChild(d);
+});
+
+/* ========== state ========== */
+let currentStepIndex = 0;
+let autoplay = false;
+const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ========== helpers ========== */
+
+function clearActiveVisuals(){
+  // remove active class from units (g elements)
+  const unitGroups = svg.querySelectorAll('g');
+  unitGroups.forEach(g=>{
+    g.classList.remove('active');
+  });
+  // remove active from paths
+  svg.querySelectorAll('.path').forEach(p=>p.classList.remove('active'));
+  // clear moving dots
+  while(movingDotsGroup.firstChild) movingDotsGroup.removeChild(movingDotsGroup.firstChild);
+  // clear left active step highlight
+  document.querySelectorAll('.step-item').forEach(el=>el.classList.remove('active'));
+  // pipeline clear
+  [stageIf,stageId,stageEx,stageMem,stageWb].forEach(s=>s.classList.remove('active'));
+}
+
+function highlightUnit(id){
+  const g = document.getElementById(id);
+  if(g) g.classList.add('active');
+}
+
+function highlightPath(pathId){
+  const p = document.getElementById(pathId);
+  if(!p) return;
+  p.classList.add('active');
+  // move a dot along the path
+  animateDotAlongPath(p, 800);
+}
+
+/* animate dot manually along SVG path using requestAnimationFrame */
+function animateDotAlongPath(pathEl, duration=600){
+  if(prefersReducedMotion) return; // skip animation for users who prefer reduced motion
+  const total = pathEl.getTotalLength();
+  const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  dot.setAttribute("r", 6);
+  dot.setAttribute("class", "moving-dot");
+  movingDotsGroup.appendChild(dot);
+
+  let start = null;
+  let rafId = null;
+  function step(ts){
+    if(!start) start = ts;
+    const t = ts - start;
+    const progress = Math.min(1, t / duration);
+    const pt = pathEl.getPointAtLength(total * progress);
+    dot.setAttribute('cx', pt.x);
+    dot.setAttribute('cy', pt.y);
+    if(progress < 1) rafId = requestAnimationFrame(step);
+    else {
+      // remove after short delay
+      setTimeout(()=>{ try{ movingDotsGroup.removeChild(dot) }catch(e){} }, 90);
+    }
+  }
+  rafId = requestAnimationFrame(step);
+  // return cancel function
+  return () => { if(rafId) cancelAnimationFrame(rafId); try{ movingDotsGroup.removeChild(dot) }catch(e){} };
+}
+
+/* update pipeline bar */
+function updatePipeline(stage){
+  [stageIf,stageId,stageEx,stageMem,stageWb].forEach(s=>s.classList.remove('active'));
+  if(stage==='IF') stageIf.classList.add('active');
+  else if(stage==='ID') stageId.classList.add('active');
+  else if(stage==='EX') stageEx.classList.add('active');
+  else if(stage==='MEM') stageMem.classList.add('active');
+  else if(stage==='WB') stageWb.classList.add('active');
+}
+
+/* speak with promise so autoplay can chain on end */
+// No TTS: narration shown visually only
+function speakText(text){
+  // return resolved promise for compatibility
+  return Promise.resolve();
+}
+
+/* ========== main update function ========== */
+async function renderStep(idx){
+  const s = steps.find(x=>x.id===idx);
+  if(!s) return;
+  // clear visuals
+  clearActiveVisuals();
+
+  // mark left list
+  const leftActive = document.querySelector(`.step-item[data-id='${s.id}']`);
+  if(leftActive) leftActive.classList.add('active');
+
+  // fill textual status
+  elPC.textContent = s.registers.PC ?? '-';
+  elMAR.textContent = s.registers.MAR ?? '-';
+  elMDR.textContent = s.registers.MDR ?? '-';
+  elIR.textContent = s.registers.IR ?? '-';
+  elR1.textContent = s.registers.R1 ?? '-';
+  elR2.textContent = s.registers.R2 ?? '-';
+  elALU.textContent = 'ALU';
+  elACC.textContent = s.registers.ACC ?? '-';
+  elFLAGS.textContent = `Z:${s.flags.Z} N:${s.flags.N} C:${s.flags.C} O:${s.flags.O}`;
+
+  stR1.textContent = s.registers.R1 ?? '-';
+  stR2.textContent = s.registers.R2 ?? '-';
+  stACC.textContent = s.registers.ACC ?? '-';
+  stFLAGS.textContent = `Z:${s.flags.Z} N:${s.flags.N} C:${s.flags.C} O:${s.flags.O}`;
+
+  stBusAddr.textContent = s.buses.address ?? '-';
+  stBusData.textContent = s.buses.data ?? '-';
+  stBusControl.textContent = s.buses.control ?? '-';
+  stPC.textContent = s.registers.PC ?? '-';
+
+  // change narration box
+  narrationText.textContent = `${s.id}. ${s.title} — ${s.narration}`;
+
+  // highlight units referenced in step
+  // We will highlight by convention: if registers contain values we highlight their boxes
+  if(s.registers.PC && s.registers.PC!=='-') highlightUnit('PC');
+  if(s.registers.MAR && s.registers.MAR!=='-') highlightUnit('MAR');
+  if(s.registers.MDR && s.registers.MDR!=='-') highlightUnit('MDR');
+  if(s.registers.IR && s.registers.IR!=='-') highlightUnit('IR');
+  if(s.registers.ACC && s.registers.ACC!=='-') highlightUnit('ACC');
+  if(s.registers.R1 && s.registers.R1!=='-') highlightUnit('REGFILE');
+  if(s.registers.R2 && s.registers.R2!=='-') highlightUnit('REGFILE');
+  // flags
+  highlightUnit('FLAGS');
+  // control unit
+  if(s.buses.control && s.buses.control!=='-') highlightUnit('CTRL');
+
+  // highlight active path(s)
+  s.activePaths.forEach(pid=> highlightPath(pid));
+
+  // pipeline highlight
+  updatePipeline(s.pipeline);
+
+  // speak narration (and wait if autoplay)
+  // show narration text visually
+  // (no TTS) - keep a brief visible update
+  // wait a small moment only when autoplay is running to make step readable
+  await speakText(s.narration);
+}
+
+/* ========== navigation ========== */
+
+function jumpToStep(id){
+  currentStepIndex = id;
+  renderStep(currentStepIndex);
+  // if autoplay, cancel it on manual jump
+  if(autoplay) stopAuto();
+}
+
+async function nextStep(){
+  // find current index in steps array by id
+  const currentIdx = steps.findIndex(x=>x.id===currentStepIndex);
+  // if not found (initial), move to first step (0)
+  if(currentIdx === -1){
+    currentStepIndex = steps[0].id;
+    await renderStep(currentStepIndex);
+    return;
+  }
+  if(currentIdx < steps.length - 1){
+    currentStepIndex = steps[currentIdx+1].id;
+    await renderStep(currentStepIndex);
+  }
+}
+
+async function prevStep(){
+  const currentIdx = steps.findIndex(x=>x.id===currentStepIndex);
+  if(currentIdx > 0){
+    currentStepIndex = steps[currentIdx-1].id;
+    await renderStep(currentStepIndex);
+  }
+}
+
+/* Autoplay: advances automatically after narration ends */
+let autoRunning = false;
+// fixed delay per step in ms
+const STEP_DELAY_MS = 1200;
+async function startAuto(){
+  if(autoRunning) return;
+  autoRunning = true;
+  playStopBtn.textContent = 'Stop';
+  // if at end or not started, go to first step (intro with id 0)
+  let pos = steps.findIndex(x=>x.id===currentStepIndex);
+  if(pos === -1) { currentStepIndex = steps[0].id; pos = 0; }
+  // run from current to end
+  for(let i = pos; i < steps.length && autoRunning; ++i){
+    currentStepIndex = steps[i].id;
+    // update narration text visually
+    const s = steps[i];
+    document.getElementById('narrationText').textContent = `${s.id}. ${s.title} — ${s.narration}`;
+    await renderStep(currentStepIndex);
+    // wait fixed delay unless it's the last step
+    if(i < steps.length - 1){
+      await new Promise(r => setTimeout(r, STEP_DELAY_MS));
+    }
+  }
+  autoRunning = false;
+  playStopBtn.textContent = 'Play';
+}
+
+function stopAuto(){
+  autoRunning = false;
+  playStopBtn.textContent = 'Play';
+}
+
+/* hook up controls */
+playStopBtn.addEventListener('click', ()=>{
+  if(autoRunning){ stopAuto(); }
+  else { startAuto(); }
+});
+prevBtn.addEventListener('click', ()=>{ stopAuto(); prevStep(); });
+nextBtn.addEventListener('click', ()=>{ stopAuto(); nextStep(); });
+
+/* keyboard shortcuts */
+document.addEventListener('keydown',(e)=>{
+  if(e.key === 'ArrowRight') { stopAuto(); nextStep(); }
+  if(e.key === 'ArrowLeft') { stopAuto(); prevStep(); }
+  if(e.key === ' ') { e.preventDefault(); if(autoRunning) stopAuto(); else startAuto(); }
+});
+
+/* initialize UI (start at intro) */
+currentStepIndex = steps[0].id;
+renderStep(currentStepIndex);
+
+</script>
+</body>
+</html>
+
+
